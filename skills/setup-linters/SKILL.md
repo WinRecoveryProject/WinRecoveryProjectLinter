@@ -1,11 +1,11 @@
 ---
 name: setup-linters
-description: Explicitly prepare only the locally detected or selected pinned linter tools, with no paid service and no global configuration changes.
+description: "Use when explicitly setting up the locally detected or selected pinned linter tools, with no paid service and no global configuration changes."
 ---
 
 # Prepare local linters
 
-Resolve this plugin's directory as two levels above this SKILL.md. Use only its relative packaged scripts.
+Resolve this plugin's directory as `../..` from the directory containing this SKILL.md. Use only its relative packaged scripts.
 
 Setup is a separate explicit operation. A scan request alone never authorizes network installation. When the user requests setup, proceed within that authorization without asking again.
 
