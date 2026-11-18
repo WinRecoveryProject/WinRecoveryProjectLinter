@@ -61,7 +61,7 @@ try {
     }
   }
 } catch (error) {
-  const report = { status: 'INCOMPLETE', exitCode: 2, error: error.message, ...(error.code === 'ERR_MODULE_NOT_FOUND' ? { remedy: 'Run npm ci --ignore-scripts in the packaged plugin/CLI directory.' } : {}) };
+  const report = { status: 'INCOMPLETE', exitCode: 2, error: error.message, ...(error.code === 'ERR_MODULE_NOT_FOUND' ? { remedy: 'Verify this exact plugin package if a bundled module is missing. Use wrp-lint setup <project-root> --detected for missing pinned tools; scan never installs them.' } : {}) };
   if (options?.format === 'json') console.log(JSON.stringify(report, null, 2)); else console.error(`INCOMPLETE: ${report.error}${report.remedy ? '\n' + report.remedy : ''}`);
   process.exitCode = 2;
 }

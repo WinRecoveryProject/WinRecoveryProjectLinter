@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "WinRecoveryProjectLinter",
     "shortDescription": "Lokal lint med synlig dækning",
-    "longDescription": "Read-only local source checks with actual language parsers, explicit missing-tool reports and a zero-paid-services default. Setup installs only detected or explicitly selected tools into this product directory.",
+    "longDescription": "Read-only local source checks with actual language parsers, explicit missing-tool reports and a zero-paid-services default. Explicit setup prepares only detected or selected tools in a verified per-user runtime cache that survives plugin replacement.",
     "developerName": "Zilvereyes",
     "category": "Developer Tools",
     "capabilities": [
