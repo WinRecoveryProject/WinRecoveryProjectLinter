@@ -1,0 +1,63 @@
+{
+  "name": "winrecoveryproject-linter",
+  "displayName": "WinRecoveryProjectLinter",
+  "publisher": "Zilvereyes",
+  "version": "0.1.6",
+  "description": "Local source linting with findings in Problems and explicit coverage for unavailable checks.",
+  "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WinRecoveryProject/WinRecoveryProjectLinter"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Linters"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./extension.cjs",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Runs the bundled, read-only linter in trusted local workspaces."
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "wrpLinter.scan",
+        "title": "Scan Workspace Folder",
+        "category": "WinRecoveryProjectLinter"
+      },
+      {
+        "command": "wrpLinter.doctor",
+        "title": "Check Linter Availability",
+        "category": "WinRecoveryProjectLinter"
+      }
+    ],
+    "configuration": {
+      "title": "WinRecoveryProjectLinter",
+      "properties": {
+        "wrpLinter.nodePath": {
+          "type": "string",
+          "scope": "machine",
+          "default": "",
+          "description": "Optional absolute path to a Node.js 24+ executable outside the workspace. With an empty value, the extension searches the VS Code host PATH."
+        }
+      }
+    }
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "extension.cjs",
+    "runner.cjs",
+    "icon.png",
+    "core/**"
+  ]
+}
