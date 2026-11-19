@@ -118,6 +118,11 @@ YAML, TOML and Python adapters run only when detected or explicitly selected.
 Recognized unsupported source formats (including SCSS/Less and Bats) are
 listed as INCOMPLETE. Images, archives and unknown non-source files are ignored.
 
+On Windows, a trusted executable on PATH is preferred. When PATH discovery
+fails, Linter can use Bash bundled with the selected Git for Windows installation
+or locate the current user's registered Microsoft Store PowerShell package.
+Absolute `WRP_LINT_BASH` and `WRP_LINT_PWSH` overrides still take precedence.
+
 PowerShell requires an existing trusted pwsh >=7.4.6 and PSScriptAnalyzer 1.25.0.
 The wrapper imports only that exact version and uses parser input snapshots and
 `Invoke-ScriptAnalyzer -ScriptDefinition` with a fixed built-in rule allowlist.
