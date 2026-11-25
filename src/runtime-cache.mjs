@@ -27,6 +27,34 @@ function physical(target, { missing = false } = {}) {
   }
   return target;
 }
+function physicalIdentity(target, { missing = false } = {}) {
+  target = physical(target, { missing });
+  const suffix = [];
+  let current = target;
+  while (true) {
+    try { return path.join(fs.realpathSync(current), ...suffix); }
+    catch (error) {
+      if (!missing || error.code !== 'ENOENT' || path.dirname(current) === current) throw error;
+      suffix.unshift(path.basename(current));
+      current = path.dirname(current);
+    }
+  }
+}
+function physicallyInside(root, candidate) {
+  let expected;
+  try { expected = fs.statSync(root); }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  let current = candidate;
+  while (true) {
+    try {
+      const observed = fs.statSync(current);
+      if (expected.ino !== 0 && observed.ino !== 0 && observed.dev === expected.dev && observed.ino === expected.ino) return true;
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
 function relativeFile(root, relative) {
   if (typeof relative !== 'string' || !relative || relative.includes('\\') || relative.includes(':') || relative.split('/').some(part => !part || part === '.' || part === '..')) throw new Error('Invalid runtime receipt path');
   const target = path.resolve(root, ...relative.split('/'));
@@ -44,9 +72,22 @@ function hashFile(file, kind) {
   return digest(fs.readFileSync(file));
 }
 export function defaultCacheRoot({ env = process.env, platform = process.platform, home = os.homedir() } = {}) {
-  if (env.WRP_LINT_RUNTIME_CACHE) return localAbsolute(env.WRP_LINT_RUNTIME_CACHE);
-  const base = platform === 'win32' ? (env.LOCALAPPDATA || path.join(home, 'AppData', 'Local')) : platform === 'darwin' ? path.join(home, 'Library', 'Caches') : (env.XDG_CACHE_HOME || path.join(home, '.cache'));
+  const value = name => {
+    const key = platform === 'win32' ? Object.keys(env).find(item => item.toUpperCase() === name) : name;
+    return key === undefined ? undefined : env[key];
+  };
+  if (value('WRP_LINT_RUNTIME_CACHE')) return localAbsolute(value('WRP_LINT_RUNTIME_CACHE'));
+  const base = platform === 'win32' ? (value('LOCALAPPDATA') || path.join(home, 'AppData', 'Local')) : platform === 'darwin' ? path.join(home, 'Library', 'Caches') : (value('XDG_CACHE_HOME') || path.join(home, '.cache'));
   return localAbsolute(path.join(base, 'WinRecoveryProjectLinter', 'runtimes'));
+}
+export function assertRuntimeCacheDisjoint(workspaceRoots, { cacheRoot = defaultCacheRoot() } = {}) {
+  if (!Array.isArray(workspaceRoots) || !workspaceRoots.length) throw new Error('Runtime cache validation requires at least one workspace root');
+  const base = physicalIdentity(cacheRoot, { missing: true });
+  for (const root of workspaceRoots) {
+    const workspace = fs.realpathSync(localAbsolute(root));
+    if (inside(workspace, base) || inside(base, workspace) || physicallyInside(workspace, base) || physicallyInside(base, workspace)) throw new Error('Runtime cache must be physically disjoint from every workspace root');
+  }
+  return base;
 }
 export function runtimeContract(packageDirectory = ownRoot) {
   const pkg = json(path.join(packageDirectory, 'package.json'));

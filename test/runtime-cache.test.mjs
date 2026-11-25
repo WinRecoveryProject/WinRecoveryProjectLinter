@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { prepareRuntime, verifiedRuntime, resolveLibrary, runtimeContract, runtimeLocation, defaultCacheRoot } from '../src/runtime-cache.mjs';
+import { prepareRuntime, verifiedRuntime, resolveLibrary, runtimeContract, runtimeLocation, defaultCacheRoot, assertRuntimeCacheDisjoint } from '../src/runtime-cache.mjs';
 import { setup } from '../src/setup.mjs';
 import { probe, pythonRuntime } from '../src/engine.mjs';
 
@@ -133,7 +133,19 @@ test('Invalid cache paths, missing ABI identity and unknown libraries cannot cha
   assert.throws(() => runtimeLocation('blinter', ctx), /Python runtime identity/);
   assert.throws(() => resolveLibrary('../project/custom-loader.cjs', ctx), /fixed linter capability/);
   assert.throws(() => defaultCacheRoot({ env: { WRP_LINT_RUNTIME_CACHE: 'relative-path' } }), /local absolute/);
+  assert.equal(defaultCacheRoot({ env: { wrp_lint_runtime_cache: ctx.cacheRoot }, platform: 'win32' }), ctx.cacheRoot);
+  assert.equal(defaultCacheRoot({ env: { localappdata: ctx.root }, platform: 'win32' }), path.join(ctx.root, 'WinRecoveryProjectLinter', 'runtimes'));
   assert.equal(runtimeContract(ctx.packageDirectory).fingerprint.length, 64);
+});
+
+test('Runtime caches must be physically disjoint from every workspace root', async t => {
+  const ctx = await fixture(t);
+  const nestedWorkspace = path.join(ctx.cacheRoot, 'contributor workspace');
+  await fs.mkdir(nestedWorkspace, { recursive: true });
+  assert.throws(() => assertRuntimeCacheDisjoint([ctx.root], { cacheRoot: ctx.cacheRoot }), /physically disjoint/);
+  assert.throws(() => assertRuntimeCacheDisjoint([ctx.cacheRoot], { cacheRoot: ctx.cacheRoot }), /physically disjoint/);
+  assert.throws(() => assertRuntimeCacheDisjoint([nestedWorkspace], { cacheRoot: ctx.cacheRoot }), /physically disjoint/);
+  assert.equal(assertRuntimeCacheDisjoint([ctx.packageDirectory], { cacheRoot: ctx.cacheRoot }), ctx.cacheRoot);
 });
 
 test('Explicit setup uses its own locked staging root and ignores target npm config; a ready runtime needs no second installer', async t => {

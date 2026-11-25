@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
-const { diagnosticPath, processEnvironment, readReport } = require('./runner.cjs');
+const { diagnosticPath, processEnvironment, readReport, validateRuntimeCache } = require('./runner.cjs');
 
 const core = process.env.WRP_TEST_PACKAGED_CORE || path.resolve(__dirname, '..', '..');
 
@@ -31,6 +31,21 @@ test('runner ignores workspace and relative PATH entries and Node startup hooks'
   assert.equal(result.env.BASH_ENV, undefined);
   assert.equal(result.env.PSModulePath, await fs.realpath(path.dirname(process.execPath)));
   await assert.rejects(processEnvironment('./node', [root]), /absolute/);
+});
+
+test('runner rejects a cache overlapping any open workspace before launch', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wrp-vscode-cache-'));
+  const selected = path.join(root, 'selected');
+  const cacheOwner = path.join(root, 'cache owner');
+  await fs.mkdir(selected);
+  await fs.mkdir(cacheOwner);
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await assert.rejects(validateRuntimeCache(core, [selected, cacheOwner], {
+    WRP_LINT_RUNTIME_CACHE: path.join(cacheOwner, 'runtime cache'),
+  }), /physically disjoint/);
+  assert.equal(await validateRuntimeCache(core, [selected], {
+    WRP_LINT_RUNTIME_CACHE: path.join(cacheOwner, 'runtime cache'),
+  }), path.join(await fs.realpath(cacheOwner), 'runtime cache'));
 });
 
 test('bundled executable produces real doctor, finding, clean and incomplete reports', async (t) => {
