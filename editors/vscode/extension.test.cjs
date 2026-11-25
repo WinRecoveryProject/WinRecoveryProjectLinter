@@ -15,7 +15,7 @@ test('manual scan and doctor respect trust and publish exact workspace diagnosti
   const output = [];
   const actions = [];
   const workspace = {
-    isTrusted: false, workspaceFolders: [{ name: 'Root', uri: { scheme: 'file', fsPath: root } }],
+    isTrusted: false, workspaceFolders: [{ name: 'Root\n\u001b[2J', uri: { scheme: 'file', fsPath: root } }],
     getConfiguration: () => ({ get: () => '' }),
   };
   const vscode = {
@@ -43,14 +43,15 @@ test('manual scan and doctor respect trust and publish exact workspace diagnosti
       { file: 'test.lua', line: 3, column: 4, severity: 'warning', rule: 'LUA51-syntax', message: 'Finding' },
       { file: '../outside.lua', line: 1, column: 1, message: 'Ignored path' },
     ],
-    coverage: [{ type: 'lua', status: 'checked', files: 1 }],
-    incomplete: ['Another linter is unavailable'],
+    coverage: [{ type: 'lua', status: 'checked', files: 1, detail: 'Checked\r\u0085\u2028' }],
+    incomplete: ['Another linter is unavailable\n\u001b]8;;forged'],
+    notices: ['Notice\u007f\u2029forged'],
   };
   const runner = { diagnosticPath, async readReport(command, options) {
     actions.push(command);
     assert.equal(options.root, root);
     assert.equal(options.engineRoot, path.join(path.dirname(filename), 'core'));
-    if (command === 'doctor') return { results: [{ type: 'lua', available: true }] };
+    if (command === 'doctor') return { message: 'Availability\u0000only', results: [{ type: 'lua', available: true, reason: 'reason\t\u009b' }] };
     return report;
   } };
   const mod = { exports: {} };
@@ -71,11 +72,18 @@ test('manual scan and doctor respect trust and publish exact workspace diagnosti
   assert.equal(diagnostic.severity, 1);
   assert.equal(diagnostic.range.startLine, 2);
   assert.equal(diagnostic.range.startColumn, 3);
+  assert.ok(output.every(line => !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(line)));
+  assert.ok(output.join('\n').includes('Root\\u000a\\u001b[2J'));
+  assert.ok(output.join('\n').includes('Checked\\u000d\\u0085\\u2028'));
+  assert.ok(output.join('\n').includes('unavailable\\u000a\\u001b]8;;forged'));
+  assert.ok(output.join('\n').includes('Notice\\u007f\\u2029forged'));
   assert.match(output.join('\n'), /lua — checked, 1\/1 files/);
   assert.match(output.join('\n'), /Incomplete — Another linter is unavailable/);
   await callbacks.get('wrpLinter.doctor')();
   assert.deepEqual(actions, ['scan', 'doctor']);
   assert.equal(entries.size, 1);
+  assert.ok(output.join('\n').includes('Availability\\u0000only'));
+  assert.ok(output.join('\n').includes('reason\\u0009\\u009b'));
   assert.match(output.join('\n'), /lua — available/);
   report.findings = [];
   await scan();

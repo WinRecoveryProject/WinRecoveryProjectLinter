@@ -181,6 +181,21 @@ test('CLI init never overwrites config; malformed config fails closed', async ()
   await assert.rejects(scan(root), /Unknown config key/);
 });
 
+test('CLI text escapes display controls while JSON preserves report values', async () => {
+  const hostile = 'forged\n\r\t\u001b\u007f\u0085\u2028\u2029';
+  const root = await fixture({ '.wrp-lint.json': JSON.stringify({ version: 1, [hostile]: true }) });
+  const bin = path.join(packageRoot, 'bin/wrp-lint.mjs');
+  const text = await run(process.execPath, [bin, 'scan', root]);
+  assert.equal(text.code, 2);
+  const records = text.stderr.split('\n');
+  assert.deepEqual(records.slice(1), ['']);
+  assert.doesNotMatch(records[0], /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u);
+  assert.ok(records[0].includes('forged\\u000a\\u000d\\u0009\\u001b\\u007f\\u0085\\u2028\\u2029'));
+  const json = await run(process.execPath, [bin, 'scan', root, '--format', 'json']);
+  assert.equal(json.code, 2);
+  assert.equal(JSON.parse(json.stdout).error, `Unknown config key: ${hostile}`);
+});
+
 test('Fresh extraction works without original dependencies and reports missing libraries', async () => {
   const root = await fixture({ 'main.lua': 'return 1' });
   const copy = await fixture({});

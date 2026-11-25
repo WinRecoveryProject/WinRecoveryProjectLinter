@@ -5,6 +5,10 @@ import { catalog } from '../src/catalog.mjs';
 
 const help = `WinRecoveryProjectLinter 0.1.6 — local, read-only scanning, 0 kr services\n\nUsage: wrp-lint <command> [root] [options]\n  init                 Create .wrp-lint.json without overwriting\n  doctor               Check only detected/selected adapter availability\n  scan                 Scan detected/selected source types\n  list-linters         Describe adapters and limits\n  setup --detected     Explicitly install only needed supported local tools\n\nOptions: --types powershell,lua,...  --format text|json  --detected\nExit: 0 CLEAN, 1 FINDINGS, 2 INCOMPLETE (takes precedence).\nNo project scripts/configuration execute. No scan downloads or source writes.\nPrepare the pinned per-user runtime explicitly: wrp-lint setup <root> --detected\n`;
 
+const displayControls = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+const visibleText = value => String(value).replace(displayControls, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+const printTextLine = (value, error = false) => (error ? console.error : console.log)(visibleText(value));
+
 function parse(args) {
   const value = { command: args.shift(), root: process.cwd(), format: 'text' };
   let rootSeen = false;
@@ -22,14 +26,14 @@ function parse(args) {
 
 function print(value, format) {
   if (format === 'json') { console.log(JSON.stringify(value, null, 2)); return; }
-  if (Array.isArray(value)) { for (const item of value) console.log(`${item.id}: ${item.extensions.join(', ')} — ${item.tool}\n  ${item.scope}`); return; }
-  if (value.status) console.log(`${value.status} — ${value.findings?.length || 0} findings, ${value.incomplete?.length || 0} incomplete checks`);
-  for (const item of value.coverage || []) console.log(`  ${item.type}: ${item.status} (${item.files} files) — ${item.tool}${item.detail ? ': ' + item.detail : ''}`);
-  for (const item of value.findings || []) console.log(`${item.file}:${item.line}:${item.column} ${item.severity} ${item.rule} ${item.message}`);
-  for (const item of value.incomplete || []) console.log(`INCOMPLETE: ${item}`);
-  for (const item of value.notices || []) console.log(`NOTE: ${item}`);
-  if (value.results) for (const item of value.results) console.log(`${item.type}: ${item.action || (item.available ? 'available' : 'unavailable')} — ${item.reason || JSON.stringify(item.version)}`);
-  if (value.message) console.log(value.message);
+  if (Array.isArray(value)) { for (const item of value) { printTextLine(`${item.id}: ${item.extensions.join(', ')} — ${item.tool}`); printTextLine(`  ${item.scope}`); } return; }
+  if (value.status) printTextLine(`${value.status} — ${value.findings?.length || 0} findings, ${value.incomplete?.length || 0} incomplete checks`);
+  for (const item of value.coverage || []) printTextLine(`  ${item.type}: ${item.status} (${item.files} files) — ${item.tool}${item.detail ? ': ' + item.detail : ''}`);
+  for (const item of value.findings || []) printTextLine(`${item.file}:${item.line}:${item.column} ${item.severity} ${item.rule} ${item.message}`);
+  for (const item of value.incomplete || []) printTextLine(`INCOMPLETE: ${item}`);
+  for (const item of value.notices || []) printTextLine(`NOTE: ${item}`);
+  if (value.results) for (const item of value.results) printTextLine(`${item.type}: ${item.action || (item.available ? 'available' : 'unavailable')} — ${item.reason || JSON.stringify(item.version)}`);
+  if (value.message) printTextLine(value.message);
 }
 
 let options;
@@ -67,6 +71,7 @@ try {
   }
 } catch (error) {
   const report = { status: 'INCOMPLETE', exitCode: 2, error: error.message, ...(error.code === 'ERR_MODULE_NOT_FOUND' ? { remedy: 'Verify this exact plugin package if a bundled module is missing. Use wrp-lint setup <project-root> --detected for missing pinned tools; scan never installs them.' } : {}) };
-  if (options?.format === 'json') console.log(JSON.stringify(report, null, 2)); else console.error(`INCOMPLETE: ${report.error}${report.remedy ? '\n' + report.remedy : ''}`);
+  if (options?.format === 'json') console.log(JSON.stringify(report, null, 2));
+  else { printTextLine(`INCOMPLETE: ${report.error}`, true); if (report.remedy) printTextLine(report.remedy, true); }
   process.exitCode = 2;
 }
