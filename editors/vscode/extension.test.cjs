@@ -3,7 +3,6 @@ const path = require('node:path');
 const { readFileSync } = require('node:fs');
 const { test } = require('node:test');
 const vm = require('node:vm');
-const { diagnosticPath } = require('./runner.cjs');
 
 const filename = path.join(__dirname, 'extension.cjs');
 const source = readFileSync(filename, 'utf8');
@@ -38,6 +37,7 @@ test('manual scan and doctor respect trust and publish exact workspace diagnosti
     },
   };
   const report = {
+    root,
     status: 'INCOMPLETE',
     findings: [
       { file: 'test.lua', line: 3, column: 4, severity: 'warning', rule: 'LUA51-syntax', message: 'Finding' },
@@ -46,7 +46,10 @@ test('manual scan and doctor respect trust and publish exact workspace diagnosti
     coverage: [{ type: 'lua', status: 'checked', files: 1 }],
     incomplete: ['Another linter is unavailable'],
   };
-  const runner = { diagnosticPath, async readReport(command, options) {
+  const runner = { async diagnosticPath(scanRoot, name) {
+    assert.equal(scanRoot, report.root);
+    return name === 'test.lua' ? path.join(scanRoot, name) : null;
+  }, async readReport(command, options) {
     actions.push(command);
     assert.equal(options.root, root);
     assert.equal(options.engineRoot, path.join(path.dirname(filename), 'core'));

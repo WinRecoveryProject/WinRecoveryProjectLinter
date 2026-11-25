@@ -11,10 +11,23 @@ function isInside(root, candidate) {
   return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep));
 }
 
-function diagnosticPath(root, name) {
-  if (typeof name !== 'string' || !name || name.includes(':') || /\p{Cc}/u.test(name) || path.isAbsolute(name) || /^[\\/]/.test(name)) return null;
-  const candidate = path.resolve(root, name.replaceAll('\\', '/'));
-  return candidate !== root && isInside(root, candidate) ? candidate : null;
+async function diagnosticPath(root, name) {
+  if (typeof name !== 'string' || !name || /\p{Cc}/u.test(name) || path.isAbsolute(name) || (process.platform === 'win32' && name.includes(':'))) return null;
+  try {
+    const physicalRoot = await fs.realpath(root);
+    const candidate = path.resolve(physicalRoot, name);
+    if (candidate === physicalRoot || !isInside(physicalRoot, candidate)) return null;
+    let current = physicalRoot;
+    let stat;
+    for (const part of path.relative(physicalRoot, candidate).split(path.sep)) {
+      current = path.join(current, part);
+      stat = await fs.lstat(current);
+      if (stat.isSymbolicLink()) return null;
+    }
+    if (!stat?.isFile()) return null;
+    const physical = await fs.realpath(candidate);
+    return physical !== physicalRoot && isInside(physicalRoot, physical) ? physical : null;
+  } catch { return null; }
 }
 
 async function processEnvironment(configuredNode, roots, env = process.env) {
@@ -62,6 +75,7 @@ async function processEnvironment(configuredNode, roots, env = process.env) {
 async function readReport(command, { engineRoot, root, workspaceRoots, configuredNode, signal }) {
   if (!['scan', 'doctor'].includes(command)) throw new Error('Unsupported linter command.');
   const { node, env } = await processEnvironment(configuredNode, workspaceRoots);
+  const scanRoot = command === 'scan' ? await fs.realpath(root) : null;
   const options = { cwd: engineRoot, env, signal, windowsHide: true, maxBuffer: 32 * 1024 * 1024 };
   const version = (await run(node, ['--version'], options)).stdout.trim().match(/^v(\d+)\./);
   if (!version || Number(version[1]) < 24) throw new Error('WinRecoveryProjectLinter requires Node.js 24 or newer.');
@@ -78,6 +92,7 @@ async function readReport(command, { engineRoot, root, workspaceRoots, configure
   if (!report || report.exitCode !== result.code || (command === 'scan' && report.status !== statuses[result.code])) {
     throw new Error('The bundled linter report disagrees with its process status.');
   }
+  if (command === 'scan' && report.root !== scanRoot) throw new Error('The bundled linter report disagrees with the requested scan root.');
   return report;
 }
 

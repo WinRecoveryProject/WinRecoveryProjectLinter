@@ -7,13 +7,29 @@ const { diagnosticPath, processEnvironment, readReport } = require('./runner.cjs
 
 const core = process.env.WRP_TEST_PACKAGED_CORE || path.resolve(__dirname, '..', '..');
 
-test('findings resolve inside the workspace only', () => {
-  const root = path.resolve(os.tmpdir(), 'test root');
-  assert.equal(diagnosticPath(root, 'src/file.json'), path.join(root, 'src', 'file.json'));
-  assert.equal(diagnosticPath(root, '..\\outside.json'), null);
-  assert.equal(diagnosticPath(root, '/../outside.json'), null);
-  assert.equal(diagnosticPath(root, 'C:/outside.json'), null);
-  assert.equal(diagnosticPath(root, 'file.json:alternate'), null);
+test('findings resolve to regular files inside the physical workspace only', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'wrp-vscode-diagnostic-'));
+  const file = path.join(root, 'src', 'file.json');
+  await fs.mkdir(path.dirname(file));
+  await fs.writeFile(file, '{}\n');
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  assert.equal(await diagnosticPath(root, 'src/file.json'), await fs.realpath(file));
+  assert.equal(await diagnosticPath(root, '../outside.json'), null);
+  assert.equal(await diagnosticPath(root, 'missing.json'), null);
+  if (process.platform === 'win32') {
+    assert.equal(await diagnosticPath(root, '..\\outside.json'), null);
+    assert.equal(await diagnosticPath(root, 'C:/outside.json'), null);
+    assert.equal(await diagnosticPath(root, 'file.json:alternate'), null);
+  } else {
+    const literal = path.join(root, 'jump\\victim.json');
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'wrp-vscode-outside-'));
+    await fs.writeFile(literal, '{}\n');
+    await fs.writeFile(path.join(outside, 'victim.json'), '{}\n');
+    await fs.symlink(outside, path.join(root, 'jump'));
+    t.after(() => fs.rm(outside, { recursive: true, force: true }));
+    assert.equal(await diagnosticPath(root, 'jump\\victim.json'), await fs.realpath(literal));
+    assert.equal(await diagnosticPath(root, 'jump/victim.json'), null);
+  }
 });
 
 test('runner ignores workspace and relative PATH entries and Node startup hooks', async (t) => {
@@ -52,7 +68,7 @@ test('bundled executable produces real doctor, finding, clean and incomplete rep
   assert.equal(findings.exitCode, 1);
   assert.equal(findings.version, '0.1.6');
   assert.ok(findings.findings.some(item => item.file === 'bad.json' && item.line === 1 && item.column > 0));
-  assert.equal(diagnosticPath(root, findings.findings[0].file), file);
+  assert.equal(await diagnosticPath(root, findings.findings[0].file), await fs.realpath(file));
   await fs.writeFile(file, '{}\n');
   assert.equal((await readReport('scan', options)).status, 'CLEAN');
   await fs.writeFile(unsupported, 'p { color: red; }\n');

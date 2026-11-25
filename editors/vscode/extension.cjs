@@ -13,10 +13,12 @@ const severities = {
   hint: vscode.DiagnosticSeverity.Hint,
 };
 
-function publishFindings(collection, prior, root, report) {
+async function publishFindings(collection, prior, root, report) {
   const files = new Map();
+  const resolved = new Map();
   for (const item of report.findings ?? []) {
-    const file = diagnosticPath(root, item.file);
+    if (!resolved.has(item.file)) resolved.set(item.file, diagnosticPath(report.root, item.file));
+    const file = await resolved.get(item.file);
     if (!file || typeof item.message !== 'string') continue;
     const line = Number.isSafeInteger(item.line) ? Math.max(0, item.line - 1) : 0;
     const column = Number.isSafeInteger(item.column) ? Math.max(0, item.column - 1) : 0;
@@ -97,7 +99,7 @@ function activate(context) {
             signal: controller.signal,
           });
           if (controller.signal.aborted) return;
-          if (command === 'scan') publishFindings(diagnostics, prior, folder.uri.fsPath, report);
+          if (command === 'scan') await publishFindings(diagnostics, prior, folder.uri.fsPath, report);
           displayReport(output, folder, command, report);
           output.show(true);
         } catch (error) {
