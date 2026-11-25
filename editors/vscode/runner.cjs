@@ -1,6 +1,7 @@
 const { execFile } = require('node:child_process');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { promisify } = require('node:util');
 
 const run = promisify(execFile);
@@ -59,9 +60,15 @@ async function processEnvironment(configuredNode, roots, env = process.env) {
   throw new Error('Node.js 24 or newer was not found outside the workspace. Configure wrpLinter.nodePath at user level or add Node.js to the host PATH.');
 }
 
+async function validateRuntimeCache(engineRoot, workspaceRoots, env) {
+  const runtime = await import(pathToFileURL(path.join(engineRoot, 'src', 'runtime-cache.mjs')).href);
+  return runtime.assertRuntimeCacheDisjoint(workspaceRoots, { cacheRoot: runtime.defaultCacheRoot({ env }) });
+}
+
 async function readReport(command, { engineRoot, root, workspaceRoots, configuredNode, signal }) {
   if (!['scan', 'doctor'].includes(command)) throw new Error('Unsupported linter command.');
   const { node, env } = await processEnvironment(configuredNode, workspaceRoots);
+  await validateRuntimeCache(engineRoot, workspaceRoots, env);
   const options = { cwd: engineRoot, env, signal, windowsHide: true, maxBuffer: 32 * 1024 * 1024 };
   const version = (await run(node, ['--version'], options)).stdout.trim().match(/^v(\d+)\./);
   if (!version || Number(version[1]) < 24) throw new Error('WinRecoveryProjectLinter requires Node.js 24 or newer.');
@@ -81,4 +88,4 @@ async function readReport(command, { engineRoot, root, workspaceRoots, configure
   return report;
 }
 
-module.exports = { diagnosticPath, processEnvironment, readReport };
+module.exports = { diagnosticPath, processEnvironment, readReport, validateRuntimeCache };

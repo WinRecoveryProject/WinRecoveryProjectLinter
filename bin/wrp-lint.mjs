@@ -41,6 +41,10 @@ try {
     const { command, root, types, format, sqlDialect } = options;
     if (command === 'list-linters') print(catalog, format);
     else {
+      if (['scan', 'doctor', 'setup'].includes(command)) {
+        const { assertRuntimeCacheDisjoint } = await import('../src/runtime-cache.mjs');
+        assertRuntimeCacheDisjoint([root]);
+      }
       const engine = await import('../src/engine.mjs');
       if (command === 'init') {
         const value = { version: 1, ...(types ? { types } : {}), ...(sqlDialect ? { sqlDialect } : {}), exclude: [] };
