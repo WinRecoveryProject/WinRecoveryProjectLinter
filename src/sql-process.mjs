@@ -18,8 +18,9 @@ export function verifySqlAssets(options) {
   }
   return { wasm };
 }
-export async function analyzeSql(files, { execute, executable, cwd }) {
+export async function analyzeSql(files, { execute, executable, cwd, emit }) {
   const diagnostics = [];
+  const add = diagnostic => emit ? emit(diagnostic) : diagnostics.push(diagnostic);
   for (const { file, content } of files) {
     try {
       const result = await execute(executable, ['--max-old-space-size=128', adapter], {
@@ -34,9 +35,9 @@ export async function analyzeSql(files, { execute, executable, cwd }) {
             !Number.isInteger(item.line) || item.line < 1 || !Number.isInteger(item.column) || item.column < 1 ||
             (item.incomplete !== undefined && item.incomplete !== true)) throw new Error('Invalid SQL parser diagnostic');
       }
-      diagnostics.push(...data.diagnostics.map(item => ({ ...item, file, severity: 'error' })));
+      for (const item of data.diagnostics) add({ ...item, file, severity: 'error' });
     } catch (error) {
-      diagnostics.push({ file, rule: 'SQL-parser', message: `PostgreSQL check incomplete: ${String(error.message).slice(0, 1024)}`, line: 1, column: 1, severity: 'error', incomplete: true });
+      add({ file, rule: 'SQL-parser', message: `PostgreSQL check incomplete: ${String(error.message).slice(0, 1024)}`, line: 1, column: 1, severity: 'error', incomplete: true });
     }
   }
   return diagnostics;

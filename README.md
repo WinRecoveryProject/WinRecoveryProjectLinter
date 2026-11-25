@@ -162,8 +162,10 @@ No findings are automatically fixed and all warning levels count as findings.
 - Symlinks/reparse paths are skipped. `.git`, `node_modules`, `.venv`, `.tools`,
   vendor/build/dist/generated/archive/coverage directories and `old_`/`old-`
   directories are excluded. Exact config path exclusions are additive.
-- Limits are 10,000 source files, 2 MiB per source snapshot, 30-second external
-  process deadlines and 4 MiB combined process output. Limit failures are visible.
+- Limits are 10,000 inventoried source files, 2 MiB per source snapshot, 32 MiB
+  across selected snapshots, 128 MiB of estimated source/parser work (including
+  64 KiB per selected file), 10,000 retained findings, 30-second external process
+  deadlines and 4 MiB combined process output. Limit failures are visible.
 - External processes use absolute trusted executable discovery, argument arrays,
   `shell: false`, hidden windows and a sanitized environment. Target code,
   project scripts, executable configuration and custom linter rules never run.
