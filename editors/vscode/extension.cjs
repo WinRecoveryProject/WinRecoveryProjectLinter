@@ -3,6 +3,9 @@ const vscode = require('vscode');
 const { diagnosticPath, readReport } = require('./runner.cjs');
 
 const product = 'WinRecoveryProjectLinter';
+const displayControls = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+const visibleText = value => String(value).replace(displayControls, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+const appendTextLine = (output, value = '') => output.appendLine(visibleText(value));
 const severities = {
   error: vscode.DiagnosticSeverity.Error,
   warning: vscode.DiagnosticSeverity.Warning,
@@ -37,23 +40,24 @@ function publishFindings(collection, prior, root, report) {
 }
 
 function displayReport(output, folder, command, report) {
-  output.appendLine('\n' + folder.name + ' — ' + command);
+  appendTextLine(output);
+  appendTextLine(output, folder.name + ' — ' + command);
   if (command === 'doctor') {
-    output.appendLine(report.message ?? report.error ?? 'Adapter availability');
+    appendTextLine(output, report.message ?? report.error ?? 'Adapter availability');
     for (const item of report.results ?? []) {
-      output.appendLine('  ' + item.type + ' — ' + (item.available ? 'available' : 'unavailable') + (item.reason ? ' — ' + item.reason : ''));
+      appendTextLine(output, '  ' + item.type + ' — ' + (item.available ? 'available' : 'unavailable') + (item.reason ? ' — ' + item.reason : ''));
     }
     return;
   }
-  output.appendLine(report.status + ' — ' + (report.findings?.length ?? 0) + ' findings');
+  appendTextLine(output, report.status + ' — ' + (report.findings?.length ?? 0) + ' findings');
   for (const row of report.coverage ?? []) {
     const checked = row.checkedFiles ?? (row.status === 'checked' ? row.files : 0);
-    output.appendLine('  ' + row.type + ' — ' + row.status + ', ' + checked + '/' + row.files + ' files' + (row.detail ? ' — ' + row.detail : ''));
+    appendTextLine(output, '  ' + row.type + ' — ' + row.status + ', ' + checked + '/' + row.files + ' files' + (row.detail ? ' — ' + row.detail : ''));
   }
-  if (report.error) output.appendLine('  ' + report.error);
-  if (report.remedy) output.appendLine('  ' + report.remedy);
-  for (const reason of report.incomplete ?? []) output.appendLine('  Incomplete — ' + reason);
-  for (const notice of report.notices ?? []) output.appendLine('  Note — ' + notice);
+  if (report.error) appendTextLine(output, '  ' + report.error);
+  if (report.remedy) appendTextLine(output, '  ' + report.remedy);
+  for (const reason of report.incomplete ?? []) appendTextLine(output, '  Incomplete — ' + reason);
+  for (const notice of report.notices ?? []) appendTextLine(output, '  Note — ' + notice);
 }
 
 function activate(context) {
@@ -102,8 +106,9 @@ function activate(context) {
           output.show(true);
         } catch (error) {
           if (!controller.signal.aborted) {
-            output.appendLine(String(error.message));
-            vscode.window.showErrorMessage(product + ' — ' + error.message);
+            const message = visibleText(error.message);
+            appendTextLine(output, message);
+            vscode.window.showErrorMessage(product + ' — ' + message);
           }
         } finally {
           cancellation.dispose();
