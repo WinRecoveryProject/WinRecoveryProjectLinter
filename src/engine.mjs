@@ -16,9 +16,14 @@ export const configName = '.wrp-lint.json';
 const excluded = new Set(['.git', 'node_modules', '.venv', 'venv', '.tools', 'vendor', 'build', 'dist', 'generated', 'archive', 'archives', 'coverage', '.next', '__pycache__']);
 const maxBytes = 2 * 1024 * 1024;
 const maxFiles = 10000;
+const maxAggregateBytes = 32 * 1024 * 1024;
+const estimatedBytesPerFile = 64 * 1024;
+const maxEstimatedWorkBytes = 128 * 1024 * 1024;
+const maxFindings = 10000;
 const slash = value => value.split(path.sep).join('/');
 const issue = (file, rule, message, line = 1, column = 1, severity = 'error') => ({ file, line, column, severity, rule, message });
 const errorText = error => error instanceof Error ? error.message : String(error);
+class AggregateSourceBudgetError extends Error {}
 
 export async function readConfig(root) {
   root = await fs.realpath(root);
@@ -116,19 +121,28 @@ async function safeBytes(absolute, root, limit, prefix = false) {
   } finally { await handle.close(); }
 }
 
-async function snapshot(item, root) {
+async function snapshot(item, root, remainingBytes = maxAggregateBytes) {
   if (item.size > maxBytes) throw new Error(`${item.file} exceeds ${maxBytes} bytes`);
-  const buffer = await safeBytes(item.absolute, root, maxBytes);
+  if (item.size > remainingBytes) throw new AggregateSourceBudgetError(`Selected source snapshots exceed ${maxAggregateBytes} aggregate bytes`);
+  const limit = Math.min(maxBytes, remainingBytes);
+  let buffer;
+  try { buffer = await safeBytes(item.absolute, root, limit); }
+  catch (error) {
+    if (limit < maxBytes && /^Source (?:exceeds|grew above) /.test(errorText(error))) throw new AggregateSourceBudgetError(`Selected source snapshots exceed ${maxAggregateBytes} aggregate bytes`);
+    throw error;
+  }
   // Windows scripts frequently use UTF-16LE with BOM. Other text is strict UTF-8.
-  if (buffer[0] === 0xff && buffer[1] === 0xfe) return new TextDecoder('utf-16le', { fatal: true }).decode(buffer);
-  if (buffer[0] === 0xfe && buffer[1] === 0xff) return new TextDecoder('utf-16be', { fatal: true }).decode(buffer);
-  return new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+  const content = buffer[0] === 0xff && buffer[1] === 0xfe ? new TextDecoder('utf-16le', { fatal: true }).decode(buffer)
+    : buffer[0] === 0xfe && buffer[1] === 0xff ? new TextDecoder('utf-16be', { fatal: true }).decode(buffer)
+      : new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+  return { content, bytes: buffer.length };
 }
 
-async function compiler(files) {
+async function compiler(files, emit) {
   if (!files.length) return [];
   const { default: ts } = await importLibrary('typescript');
   const findings = [];
+  const add = finding => emit ? emit(finding) : findings.push(finding);
   const sources = new Map(files.map(file => [path.normalize(file.absolute), file]));
   const libRoot = path.dirname(resolveLibrary('typescript'));
   const nodeTypes = path.dirname(resolveLibrary('@types/node/package.json'));
@@ -145,14 +159,14 @@ async function compiler(files) {
   for (const diagnostic of ts.getPreEmitDiagnostics(program)) {
     const source = diagnostic.file && sources.get(path.normalize(diagnostic.file.fileName));
     const position = diagnostic.file && diagnostic.start !== undefined ? diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start) : { line: 0, character: 0 };
-    findings.push(issue(source?.file || '<compiler>', `TS${diagnostic.code}`, ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'), position.line + 1, position.character + 1));
+    add(issue(source?.file || '<compiler>', `TS${diagnostic.code}`, ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'), position.line + 1, position.character + 1));
   }
   for (const source of program.getSourceFiles()) {
     const item = sources.get(path.normalize(source.fileName));
     if (!item) continue;
     const visit = node => {
       const rule = ts.isDebuggerStatement(node) ? 'WRP-no-debugger' : ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'eval' ? 'WRP-no-eval' : undefined;
-      if (rule) { const pos = source.getLineAndCharacterOfPosition(node.getStart(source)); findings.push(issue(item.file, rule, rule === 'WRP-no-eval' ? 'Avoid direct eval.' : 'Remove debugger statement.', pos.line + 1, pos.character + 1, 'warning')); }
+      if (rule) { const pos = source.getLineAndCharacterOfPosition(node.getStart(source)); add(issue(item.file, rule, rule === 'WRP-no-eval' ? 'Avoid direct eval.' : 'Remove debugger statement.', pos.line + 1, pos.character + 1, 'warning')); }
       ts.forEachChild(node, visit);
     };
     visit(source);
@@ -160,9 +174,9 @@ async function compiler(files) {
   return findings;
 }
 
-async function internal(item, root, notices) {
+async function internal(item, root, notices, emit) {
   const text = item.content, findings = [];
-  const add = (rule, message, line, column) => findings.push(issue(item.file, rule, message, line, column));
+  const add = (rule, message, line, column) => emit ? emit(issue(item.file, rule, message, line, column)) : findings.push(issue(item.file, rule, message, line, column));
   if (item.type === 'json') {
     const { parse: parseJson, printParseErrorCode } = await importLibrary('jsonc-parser');
     const errors = [];
@@ -316,14 +330,16 @@ export async function probe(type, root, execute = run, { cacheRoot, sqlDialect }
   } catch (error) { return { available: false, reason: errorText(error) }; }
 }
 
-async function external(type, files, tool, root, execute) {
+async function external(type, files, tool, root, execute, emit) {
+  const findings = [];
+  const add = finding => emit ? emit(finding) : findings.push(finding);
   if (type === 'sql') {
     const { analyzeSql } = await import('./sql-process.mjs');
-    return analyzeSql(files, { execute, executable: process.execPath, cwd: packageRoot });
+    return analyzeSql(files, { execute, executable: process.execPath, cwd: packageRoot, emit });
   }
   if (type === 'powershell') {
     const { analyzePowerShell } = await import('./powershell-batch.mjs');
-    return analyzePowerShell(files, { execute, executable: tool.executable, adapter: path.join(packageRoot, 'adapters/powershell.ps1'), cwd: packageRoot });
+    return analyzePowerShell(files, { execute, executable: tool.executable, adapter: path.join(packageRoot, 'adapters/powershell.ps1'), cwd: packageRoot, emit });
   }
   if (type === 'python') {
     const args = ['-I', '-B', path.join(packageRoot, 'adapters/python-syntax.py')];
@@ -331,26 +347,26 @@ async function external(type, files, tool, root, execute) {
     if (result.code !== 0) throw new Error(result.stderr || `Adapter exited ${result.code}`);
     const data = JSON.parse(result.stdout.trim());
     if (!Array.isArray(data)) throw new Error('Adapter returned a non-array report');
-    return data;
+    for (const item of data) add(item);
+    return findings;
   }
-  const findings = [];
   for (const file of files) {
     if (type === 'bash') {
       const syntax = await execute(tool.executable, ['--noprofile', '--norc', '-n'], { cwd: packageRoot, input: file.content });
       if (syntax.code > 2 || syntax.code === null) throw new Error(syntax.stderr || 'Bash failed');
-      if (syntax.code !== 0) findings.push(issue(file.file, 'BASH-syntax', syntax.stderr.trim(), Number(/line (\d+)/.exec(syntax.stderr)?.[1] || 1)));
+      if (syntax.code !== 0) add(issue(file.file, 'BASH-syntax', syntax.stderr.trim(), Number(/line (\d+)/.exec(syntax.stderr)?.[1] || 1)));
       // External source following is OFF by default; never pass -x/--external-sources.
       const result = await execute(tool.shellcheck, ['--norc', '--format=json', '--shell=bash', '-'], { cwd: packageRoot, input: file.content });
       if (![0, 1].includes(result.code)) throw new Error(result.stderr || `ShellCheck exited ${result.code}`);
       const data = JSON.parse(result.stdout);
       if (!Array.isArray(data)) throw new Error('ShellCheck returned a non-array report');
-      for (const item of data) findings.push(issue(file.file, `SC${item.code}`, item.message, item.line, item.column, item.level));
+      for (const item of data) add(issue(file.file, `SC${item.code}`, item.message, item.line, item.column, item.level));
     } else if (type === 'batch') {
       const result = await execute(tool.executable, ['-I', '-B', '-m', 'blinter', '--no-config', '--no-recursive', '--format', 'json', '--fail-on', 'style', file.absolute], { cwd: packageRoot });
       if (![0, 1].includes(result.code)) throw new Error(result.stderr || `Blinter exited ${result.code}`);
       const report = JSON.parse(result.stdout);
       if (!Array.isArray(report.processed_files) || !Array.isArray(report.issues) || report.blinter_version !== '1.1.66') throw new Error('Blinter returned an unknown report schema');
-      for (const item of report.issues) findings.push(issue(file.file, item.code, item.explanation || item.name || item.code, item.line || 1, item.column || 1, (item.severity || 'warning').toLowerCase()));
+      for (const item of report.issues) add(issue(file.file, item.code, item.explanation || item.name || item.code, item.line || 1, item.column || 1, (item.severity || 'warning').toLowerCase()));
       if (report.processed_files.length !== 1 || report.skipped_files?.length) throw new Error('Blinter did not check exactly one requested file');
     }
   }
@@ -369,10 +385,35 @@ export async function scan(root, { types, execute = run, toolProbe = probe, sqlD
   if (!selected.length) incomplete.push('No source types selected; no checks executed');
   for (const type of detected.filter(type => !selected.includes(type))) notices.push(`Detected ${type} excluded by explicit type selection`);
   const snapshots = [];
-  for (const item of inv.files.filter(file => selected.includes(file.type))) {
-    try { snapshots.push({ ...item, content: await snapshot(item, inv.root) }); }
-    catch (error) { incomplete.push(`${item.file}: ${errorText(error)}`); }
+  const selectedFiles = inv.files.filter(file => selected.includes(file.type));
+  let aggregateBytes = 0, estimatedWorkBytes = 0, sourceBudgetExceeded = false;
+  for (const item of selectedFiles) {
+    aggregateBytes += item.size;
+    estimatedWorkBytes += Math.min(item.size, maxBytes) + estimatedBytesPerFile;
+    if (aggregateBytes > maxAggregateBytes || estimatedWorkBytes > maxEstimatedWorkBytes) { sourceBudgetExceeded = true; break; }
   }
+  if (sourceBudgetExceeded) incomplete.push(`Selected sources exceed the aggregate scan budget of ${maxAggregateBytes} bytes and ${maxEstimatedWorkBytes} estimated work bytes; narrow the selected types, root, or exclusions`);
+  else {
+    let snapshotBytes = 0;
+    for (const item of selectedFiles) {
+      try {
+        const source = await snapshot(item, inv.root, maxAggregateBytes - snapshotBytes);
+        snapshotBytes += source.bytes;
+        snapshots.push({ ...item, content: source.content });
+      } catch (error) {
+        incomplete.push(`${item.file}: ${errorText(error)}`);
+        if (error instanceof AggregateSourceBudgetError) break;
+      }
+    }
+  }
+  let findingLimitReported = false;
+  const addFinding = finding => {
+    if (findings.length < maxFindings) findings.push(finding);
+    else if (!findingLimitReported) {
+      incomplete.push(`Finding retention exceeds ${maxFindings}; additional findings are omitted`);
+      findingLimitReported = true;
+    }
+  };
   for (const type of selected) {
     const files = snapshots.filter(file => file.type === type);
     const tool = await toolProbe(type, inv.root, execute, { sqlDialect: sqlDialect ?? config.sqlDialect });
@@ -383,27 +424,27 @@ export async function scan(root, { types, execute = run, toolProbe = probe, sqlD
       if (['javascript', 'typescript'].includes(type)) continue;
       if (catalog.find(item => item.id === type).kind === 'external') {
         coverageItem.checkedFiles = 0;
-        const diagnostics = await external(type, files, tool, inv.root, execute);
         const requestedFiles = new Set(files.map(item => item.file));
         const uncheckedFiles = new Set();
-        for (const item of diagnostics) {
+        const addDiagnostic = item => {
           if (item.incomplete === true) {
             if (typeof item.file !== 'string' || !requestedFiles.has(item.file)) throw new Error('Adapter returned an unknown incomplete file');
             uncheckedFiles.add(item.file);
             incomplete.push(`${item.file}:${item.line}:${item.column}: ${item.rule}: ${item.message}`);
-          } else findings.push(item);
-        }
+          } else addFinding(item);
+        };
+        await external(type, files, tool, inv.root, execute, addDiagnostic);
         coverageItem.checkedFiles = files.length - uncheckedFiles.size;
         if (uncheckedFiles.size) coverageItem.status = coverageItem.checkedFiles ? 'partial' : 'failed';
       }
-      else for (const item of files) findings.push(...await internal(item, inv.root, notices));
+      else for (const item of files) await internal(item, inv.root, notices, addFinding);
     } catch (error) { coverageItem.status = 'failed'; incomplete.push(`${type}: ${errorText(error)}`); }
   }
   if (selected.length && !snapshots.length) incomplete.push('No selected source files could be checked');
-  try { findings.push(...await compiler(snapshots.filter(file => ['javascript', 'typescript'].includes(file.type) && coverage.find(entry => entry.type === file.type)?.status === 'checked'))); }
+  try { await compiler(snapshots.filter(file => ['javascript', 'typescript'].includes(file.type) && coverage.find(entry => entry.type === file.type)?.status === 'checked'), addFinding); }
   catch (error) { incomplete.push(`compiler: ${errorText(error)}`); }
   if (!inv.files.length) incomplete.push('No supported or recognized source files found');
   findings.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.column - b.column || a.rule.localeCompare(b.rule));
   const exitCode = incomplete.length ? 2 : findings.length ? 1 : 0;
-  return { schemaVersion: 1, product: 'WinRecoveryProjectLinter', version: '0.1.6', root: inv.root, status: ['CLEAN', 'FINDINGS', 'INCOMPLETE'][exitCode], exitCode, discovery: inv.discovery, detected, selected, coverage, findings, incomplete, notices, limits: { maxFiles, maxBytesPerFile: maxBytes }, budget: { paidServices: false, telemetry: false } };
+  return { schemaVersion: 1, product: 'WinRecoveryProjectLinter', version: '0.1.6', root: inv.root, status: ['CLEAN', 'FINDINGS', 'INCOMPLETE'][exitCode], exitCode, discovery: inv.discovery, detected, selected, coverage, findings, incomplete, notices, limits: { maxFiles, maxBytesPerFile: maxBytes, maxAggregateBytes, estimatedBytesPerFile, maxEstimatedWorkBytes, maxFindings }, budget: { paidServices: false, telemetry: false } };
 }

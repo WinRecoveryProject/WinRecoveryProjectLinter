@@ -26,8 +26,9 @@ function checkedReport(text,files){
     return {file:item.file,rule:item.rule,message:item.message,line:item.line,column:item.column,severity:item.severity};
   });
 }
-export async function analyzePowerShell(files, { execute, executable, adapter, cwd }) {
+export async function analyzePowerShell(files, { execute, executable, adapter, cwd, emit }) {
   const findings = [];
+  const add = finding => emit ? emit(finding) : findings.push(finding);
   const args = ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', adapter];
 
   async function analyzeBatch(batch, allowSplit) {
@@ -36,7 +37,7 @@ export async function analyzePowerShell(files, { execute, executable, adapter, c
       if (Buffer.byteLength(input) > MAX_INPUT_BYTES) throw Error('PowerShell batch exceeds bounded adapter input');
       const result = await execute(executable, args, { cwd, input, timeout: TIMEOUT });
       if (result.code !== 0) throw Error(result.stderr || `PowerShell adapter exited ${result.code}`);
-      findings.push(...checkedReport(result.stdout, batch));
+      for (const finding of checkedReport(result.stdout, batch)) add(finding);
     } catch (error) {
       // Give each half one attempt under the same per-process timeout.
       if (allowSplit && batch.length > 1 && error instanceof ToolTimeoutError) {
@@ -46,7 +47,7 @@ export async function analyzePowerShell(files, { execute, executable, adapter, c
         return;
       }
       const reason = String(error?.message ?? error).slice(0, 2048);
-      for (const item of batch) findings.push({
+      for (const item of batch) add({
         file: item.file, rule: 'powershell-adapter', message: `PowerShell batch incomplete: ${reason}`,
         line: 1, column: 1, severity: 'error', incomplete: true
       });

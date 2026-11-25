@@ -217,6 +217,29 @@ test('Oversized sources fail explicitly while large extensionless files are only
   assert.ok(report.incomplete.some(item => item.includes('big.lua') && item.includes('exceeds')));
 });
 
+test('Aggregate selected source and finding retention budgets fail closed', async () => {
+  const maximumFile = ' '.repeat(2 * 1024 * 1024);
+  const aggregateRoot = await fixture({ ...Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`${index}.ts`, maximumFile])), 'main.lua': 'return 1\n' });
+  const aggregate = await scan(aggregateRoot, { types: ['typescript'], toolProbe: async () => ({ available: true }) });
+  assert.equal(aggregate.status, 'INCOMPLETE');
+  assert.equal(aggregate.coverage[0].files, 0);
+  assert.ok(aggregate.incomplete.some(item => item.includes('aggregate scan budget')));
+  assert.equal(aggregate.limits.maxAggregateBytes, 32 * 1024 * 1024);
+  const selected = await scan(aggregateRoot, { types: ['lua'] });
+  assert.equal(selected.status, 'CLEAN', JSON.stringify(selected));
+  assert.ok(!selected.incomplete.some(item => item.includes('aggregate scan budget')));
+
+  const highFileCount = Object.fromEntries(Array.from({ length: 2049 }, (_, index) => [`${index}.ts`, '']));
+  const estimated = await scan(await fixture(highFileCount), { types: ['typescript'], toolProbe: async () => ({ available: true }) });
+  assert.equal(estimated.status, 'INCOMPLETE');
+  assert.ok(estimated.incomplete.some(item => item.includes('estimated work bytes')));
+
+  const findings = await scan(await fixture({ 'main.js': 'debugger;\n'.repeat(10001) }), { types: ['javascript'] });
+  assert.equal(findings.status, 'INCOMPLETE');
+  assert.equal(findings.findings.length, findings.limits.maxFindings);
+  assert.ok(findings.incomplete.some(item => item.includes('Finding retention exceeds')));
+});
+
 test('Process environment cannot load Bash or Node startup configuration', async () => {
   const result = await run(process.execPath, ['-e', 'process.stdout.write(JSON.stringify([process.env.BASH_ENV,process.env.ENV,process.env.NODE_OPTIONS,process.env.PYTHONPATH]))'], { env: { ...process.env, BASH_ENV: 'evil', ENV: 'evil', NODE_OPTIONS: '--require evil', PYTHONPATH: 'evil' } });
   assert.equal(result.stdout, '[null,null,null,null]');
